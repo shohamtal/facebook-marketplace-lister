@@ -1,40 +1,38 @@
 from selenium import webdriver
 import time
 import os
+
+from selenium.webdriver.remote.webelement import WebElement
+
 from Element import Element
 from Helpers import read_json
 from datetime import datetime
 from colorama import Fore, Style
 from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.by import By
 from selenium.webdriver.support.wait import WebDriverWait
 
 
 
 class Lister:
     def __init__(self):
-        self.driver_file = 'chromedriver.exe'
+        self.driver_file = 'chromedriver'
         self.sleep_time = 1
         chrome_options = webdriver.ChromeOptions()
         prefs = {"profile.default_content_setting_values.notifications" : 2}
         chrome_options.add_experimental_option("prefs",prefs)
         chrome_options.add_experimental_option("detach", True)
         chrome_options.add_argument("--start-maximized")
-        
         self.driver = webdriver.Chrome('drivers/%s' % self.driver_file, chrome_options=chrome_options)
         self.driver.implicitly_wait(30)
         
     def read_accounts(self):
         return read_json('accounts')['accounts']
         
-    def login(self, account_id):
+    def login(self):
         registered_accounts = self.read_accounts()
-        account_info = list(filter(lambda acc: acc['id'] == account_id, registered_accounts))[0]
+        account_info = registered_accounts[0]
         log('Logging in as "%s" ..' % account_info['name'], 'main')
-        
         self.driver.get('https://www.facebook.com/login')
-        
         
         # entering email
         email_input = Element(self.driver, 'login_email').element
@@ -49,21 +47,26 @@ class Lister:
         # Submitting
         password_button = Element(self.driver, 'login_button').element
         password_button.click()
-        
-        # Confirm Logged In
-        logged = WebDriverWait(self.driver, 60).until(
-            lambda driver: "login" not in driver.current_url 
-        )
-        
-        if logged : log('Logged in Successfully.', 'success')
-        else : log('Failed To Login.', 'failure')
-        
-        return logged
+
+        # 2fa
+        if account_info['is_2fa_enabled']:
+            two_fa_button = Element(self.driver, '2fa_button').element
+            two_fa_button.click()
+            two_fa_sms_radio = Element(self.driver, '2fa_sms_radio').element
+            two_fa_sms_radio.click()
+            Element(self.driver, '2fa_continue_to_sms').element.click()
+
+        return True
     
     def list(self, item):
-        self.driver.get('https://www.facebook.com/marketplace/create/item')
-        
+        log(f'listing item {item["title"]}', 'main')
         listing_item = Item(self.driver, item)
+
+        if not listing_item.in_stock:
+            log('item not in stock. skipping...', 'main')
+            return
+
+        self.driver.get('https://www.facebook.com/marketplace/create/item')
         
         listing_item.upload_images()
         time.sleep(self.sleep_time)
@@ -99,34 +102,44 @@ class Lister:
         time.sleep(self.sleep_time)
         
         listing_item.click_publish()
-        time.sleep(self.sleep_time)
-        
-        # Check if Posted
-        posted = WebDriverWait(self.driver, 60).until(
-            lambda driver: "you" in driver.current_url 
-        )
-        
-        return posted
 
 class Item :
     def __init__(self, driver, item):
         self.driver = driver
         self.item = item
+
+    @property
+    def in_stock(self):
+        return self.item["in_stock"]
         
+    def populate_images_from_path(self):
+        dir = self.item['images_path']
+        images = sorted([
+            os.path.join(dir, f) for f in os.listdir(dir)
+            if os.path.isfile(os.path.join(dir, f))
+               and (
+                   f.lower().endswith(f".png")
+                   or f.lower().endswith(f".jpg")
+                   or f.lower().endswith(f".jpeg")
+                   or f.lower().endswith(f".webp")
+               )
+        ])
+        self.item['images'] = [{"file": x} for x in images]
+
+
     def upload_images(self):
-        try:
-            log('Uploading Images', 'main')
-            image_upload = Element(self.driver, 'post_image').element
-            self.driver.execute_script("document.querySelector('%s').classList = []" % Element(self.driver, 'post_image_css').xpath)
-            log('Showing image input ..', 'main')
-            joined_images_path = ' \n '.join([os.path.abspath('images/%s' % image['file']) for image in self.item['images']][:10])
-            log('sending images ..', 'main')
-            image_upload.send_keys(joined_images_path)
-            log('Uploaded Images Successfully .', 'success')
-            return True
-        except :
-            log('FAILED TO UPLOAD IMAGE', 'failure')
-            return False
+        log('Uploading Images', 'main')
+        image_upload = Element(self.driver, 'post_image').element
+        self.driver.execute_script("document.querySelector('%s').classList = []" % Element(self.driver, 'post_image_css').xpath)
+        log('Showing image input ..', 'main')
+        if self.item.get("images_path"):
+            self.populate_images_from_path()
+        joined_images_path = ' \n '.join([image["file"] for image in self.item['images']][:10])
+        log('sending images ..', 'main')
+        image_upload.send_keys(joined_images_path)
+        log('Uploaded Images Successfully .', 'success')
+        return True
+
             
     def enter_title(self):
         try:
@@ -158,13 +171,8 @@ class Item :
             category_dropdown = Element(self.driver, 'post_category').element
             category_dropdown.click()
             
-            values = self.item['category'] if 'category' in self.item.keys() and self.item['category']  else None
+            values = self.item['category'] if 'category' in self.item.keys() and self.item['category'] else None
             category_dropdown_option = Element(self.driver, 'post_category_option', values).element
-            print(Element(self.driver, 'post_category_option', values).xpath)
-            print(Element(self.driver, 'post_category_option', values).xpath)
-            print(Element(self.driver, 'post_category_option', values).xpath)
-            print(Element(self.driver, 'post_category_option', values).xpath)
-            print(Element(self.driver, 'post_category_option', values).xpath)
             log('clicking The Category Dropdown ..', 'sub')
             category_dropdown_option.click()
             
@@ -216,16 +224,16 @@ class Item :
     
     def choose_location(self):
         try:
-            location = self.item['location'] if self.item['location'] else Element(self.driver, 'post_location_option').defaults
+            values = self.item['location'] if self.item.get('location') else Element(self.driver, 'post_location_option').defaults
             log('Choosing The Location', 'main')
             location_input = Element(self.driver, 'post_location').element
             location_input.click()
             log('Searching Locations ..', 'sub')
             location_input.send_keys(Keys.DELETE)
-            location_input.send_keys(location)
+            location_input.send_keys(values)
             
             log('Choosing Location ..', 'sub')
-            values = self.item['location'] if 'location'in self.item.keys() and self.item['location'] else None
+            # values = self.item['location'] if 'location'in self.item.keys() and self.item['location'] else None
             location_input_option = Element(self.driver, 'post_location_option', values).element
             location_input_option.click()
             
@@ -266,7 +274,7 @@ class Item :
             return False
 
     def click_button(self, button):
-        element = Element(self.driver, button).element
+        element:WebElement = Element(self.driver, button).element
         element.click()
 
 def log(msg, type=None):
