@@ -4,4 +4,6 @@ scrape.py
 run.py
 "accounts copy.json"
 backup/*
-_pycache_/*
+__pycache__/*
+drivers/chrome*
+.idea*
