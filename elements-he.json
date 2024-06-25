@@ -1,0 +1,108 @@
+{
+  "login_email": {
+    "xpath": "//*[@id=\"email\"]",
+    "type": "input",
+    "defaults": []
+  },
+  "login_password": {
+    "xpath": "//*[@id=\"pass\"]",
+    "type": "input",
+    "defaults": []
+  },
+  "login_button": {
+    "xpath": "//*[@id=\"loginbutton\"]",
+    "type": "button",
+    "defaults": []
+  },
+  "2fa_button": {
+    "xpath": "//span/span[text()=\"לנסות דרך אחרת\"]",
+    "type": "button",
+    "defaults": []
+  },
+  "2fa_sms_radio": {
+    "xpath": "//span[text()=\"הודעת טקסט\"]",
+    "type": "button",
+    "defaults": []
+  },
+    "2fa_continue_to_sms": {
+    "xpath": "//span[text()=\"המשך\"]/../../../..",
+    "type": "element",
+    "defaults": []
+  },
+  "post_image": {
+    "xpath": "//input[@type='file'][contains(@accept,'image')]",
+    "type": "input",
+    "defaults": []
+  },
+  "post_image_css": {
+    "xpath": "input[type=\"file\"][accept*=\"image\"]",
+    "type": "",
+    "defaults": []
+  },
+  "post_title": {
+    "xpath": "//div[span/text() = \"כותרת\"]/input",
+    "type": "input",
+    "defaults": []
+  },
+
+  "post_price": {
+    "xpath": "//div[span/text() = \"מחיר\"]/input",
+    "type": "input",
+    "defaults": []
+  },
+  "post_sku": {
+    "xpath": "//div[span/text() = \"SKU\"]/input",
+    "type": "input",
+    "defaults": []
+  },
+  "post_location": {
+    "xpath": "//div[span/text() = \"מיקום\"]/input",
+    "type": "input",
+    "defaults": []
+  },
+  "post_location_option": {
+    "xpath": "//ul/li[@role=\"option\"]//*[text() = \"{}\"]",
+    "type": "element",
+    "defaults": "תל אביב - יפו"
+  },
+  "post_description": {
+    "xpath": "//span[text() = \"תיאור\"]/..//textarea",
+    "type": "input",
+    "defaults": []
+  },
+  "post_category": {
+    "xpath": "//span[text() = \"קטגוריה\"]/..",
+    "type": "element",
+    "defaults": []
+  },
+  "post_category_option": {
+    "xpath": "//span//span[text() = \"{}\"]",
+    "type": "element",
+    "defaults": "Electronics & computers"
+  },
+  "post_condition": {
+    "xpath": "//span[text() = \"מצב\"]/..",
+    "type": "element",
+    "defaults": []
+  },
+  "post_condition_option": {
+    "xpath": "//div/div/div/div/div/span[text() = \"{}\"]",
+    "type": "element",
+    "defaults": "חדש"
+  },
+  "post_hide_from_friends": {
+    "xpath": "(//input[@type = \"checkbox\"])[2]",
+    "type": "element",
+    "defaults": []
+  },
+  "post_next_button": {
+    "xpath": "//span/span[text()=\"הבא\"]",
+    "type": "button",
+    "defaults": []
+  },
+  "post_publish_button": {
+    "xpath": "//*[text()=\"פרסם/פרסמי\"]",
+    "type": "button",
+    "defaults": []
+  }
+}

@@ -2,13 +2,15 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.wait import WebDriverWait
 from Helpers import read_json, write_json, format_xpath
+from locale import Locale
+
 
 class Element:
-    def __init__(self, driver, name, values = None):
+    def __init__(self, driver, name, values = None, locale:Locale=Locale.Hebrew):
         self.driver = driver
         self.name = name
         self.values = values
-        self.pathes = read_json('elements')
+        self.pathes = read_json(f'elements-{locale.value}')
     @property
     def xpath(self):
         xpath_format = self.pathes[self.name]['xpath']
@@ -20,8 +22,6 @@ class Element:
     @property
     def element(self):
         xpath = self.xpath
-        # print("%s :: %s" % (self.name, xpath))
-        # print("%s :: %s" % (self.name, xpath))
         element_type = self.pathes[self.name]['type']
         if element_type == 'button' :
             element = WebDriverWait(self.driver, 30).until(
