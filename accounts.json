@@ -1,10 +1,16 @@
 {
-    "accounts" : [
-        {
-            "id" : "...",
-            "name" : "...",
-            "email" : "...",
-            "password" : "..."
-        }
-    ]
+  "accounts": [
+    {
+      "name": "******",
+      "email": "*******",
+      "password": "*******",
+      "is_2fa_enabled": false
+    },
+    {
+      "name": "******",
+      "email": "*******",
+      "password": "*******",
+      "is_2fa_enabled": true
+    }
+  ]
 }
