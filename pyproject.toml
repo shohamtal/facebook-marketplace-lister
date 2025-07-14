@@ -1,0 +1,10 @@
+[project]
+name = "facebook-marketplace-lister"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "colorama>=0.4.6",
+    "selenium==4.21.0",
+]

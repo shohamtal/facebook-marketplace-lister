@@ -1,16 +1,21 @@
+import pickle
 from selenium import webdriver
 import time
 import os
 
 from selenium.webdriver.remote.webelement import WebElement
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.wait import WebDriverWait
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.chrome.service import Service
 
 from Element import Element
-from Helpers import read_json
+from Helpers import read_json, format_xpath, assert_directory
 from datetime import datetime
 from colorama import Fore, Style
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.wait import WebDriverWait
 
+from locales import Locale
 
 
 class Lister:
@@ -22,18 +27,49 @@ class Lister:
         chrome_options.add_experimental_option("prefs",prefs)
         chrome_options.add_experimental_option("detach", True)
         chrome_options.add_argument("--start-maximized")
-        self.driver = webdriver.Chrome('drivers/%s' % self.driver_file, chrome_options=chrome_options)
+        service = Service('drivers/%s' % self.driver_file)
+        self.driver = webdriver.Chrome(service=service, options=chrome_options)
         self.driver.implicitly_wait(30)
-        
+        self.pathes = read_json(f'elements-{Locale.Hebrew.value}.json')
+
+    @property
+    def xpath(self, name):
+        xpath_format = self.pathes[name]['xpath']
+        return format_xpath(xpath_format, self.values) if self.values else format_xpath(xpath_format, self.defaults)
+
+    @property
+    def defaults(self):
+        return self.pathes[self.name]['defaults']
+
+    def get_element(self, name):
+        element_type = self.pathes[name]['type']
+        if element_type == 'button':
+            element = WebDriverWait(self.driver, 30).until(
+                EC.element_to_be_clickable((By.XPATH, xpath))
+            )
+        else:
+            element = self.driver.find_element(By.XPATH, xpath)
+        return element
+
     def read_accounts(self):
         return read_json('accounts')['accounts']
         
-    def login(self):
-        registered_accounts = self.read_accounts()
-        account_info = registered_accounts[0]
-        log('Logging in as "%s" ..' % account_info['name'], 'main')
+    def login(self, email):
         self.driver.get('https://www.facebook.com/login')
-        
+
+        # try to check if we can restore login from previous cookie
+        self.cookies_dir = f".{email}"
+        self.cookies_file_path = os.path.join(self.cookies_dir, "cookies.pkl")
+        if os.path.isfile(self.cookies_file_path):
+            cookies = pickle.load(open(self.cookies_file_path, "rb"))
+            for cookie in cookies:
+                self.driver.add_cookie(cookie)
+            return True
+
+        registered_accounts = self.read_accounts()
+        account_info = next(x for x in registered_accounts if x['email'] == email)
+        log('Logging in as "%s" ..' % account_info['name'], 'main')
+
         # entering email
         email_input = Element(self.driver, 'login_email').element
         email_input.clear()
@@ -50,11 +86,16 @@ class Lister:
 
         # 2fa
         if account_info['is_2fa_enabled']:
-            two_fa_button = Element(self.driver, '2fa_button').element
-            two_fa_button.click()
-            two_fa_sms_radio = Element(self.driver, '2fa_sms_radio').element
-            two_fa_sms_radio.click()
-            Element(self.driver, '2fa_continue_to_sms').element.click()
+            print("do it yourself!!!!")
+            # two_fa_button = Element(self.driver, '2fa_button').element
+            # two_fa_button.click()
+            # two_fa_sms_radio = Element(self.driver, '2fa_sms_radio').element
+            # two_fa_sms_radio.click()
+            # Element(self.driver, '2fa_continue_to_sms').element.click()
+
+        # save coockies state:
+        assert_directory(self.cookies_dir)
+        pickle.dump(self.driver.get_cookies(), open(self.cookies_file_path, "wb"))
 
         return True
     
@@ -103,6 +144,196 @@ class Lister:
         
         listing_item.click_publish()
 
+    def delete_all_items_not_working(self):
+        # self.driver.get('https://www.facebook.com/marketplace/you/selling')
+        # element = self.get_element("my_items")
+
+        # self.driver.get("https://www.facebook.com/marketplace")
+        #
+        # # Wait for the page to load and locate the "Your Items" section
+        wait = WebDriverWait(self.driver, 10)
+        # your_items_section = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "a[aria-label='Your Items']")))
+        # your_items_section.click()
+
+        # Wait for the "Your Items" page to load
+        self.driver.get('https://www.facebook.com/marketplace/you/selling')
+        time.sleep(self.sleep_time)
+        # wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[aria-label='Your Listings']")))
+
+        # Get all the listing elements
+        listing_elements = self.driver.find_elements(By.CSS_SELECTOR, "div[aria-label='Listing']")
+
+        # Delete each listing
+        for listing in listing_elements:
+            # Click the "..." button to open the menu
+            more_button = listing.find_element(By.CSS_SELECTOR, "button[aria-label='More options']")
+            more_button.click()
+
+            # Click the "Delete" option
+            delete_button = wait.until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "div[role='menuitem'][aria-label='Delete']")))
+            delete_button.click()
+
+            # Confirm the deletion
+            confirm_button = wait.until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "button[aria-label='Delete']")))
+            confirm_button.click()
+
+            # Wait for the listing to disappear
+            wait.until(EC.staleness_of(listing))
+
+            print("Listing deleted.")
+
+    def delete_all_items(self):
+        """
+        Delete all items from Facebook Marketplace selling page.
+        Navigates to the selling page and systematically deletes all listings.
+        """
+        log('Starting to delete all marketplace items...', 'main')
+        
+        # Navigate to the selling page
+        self.driver.get('https://www.facebook.com/marketplace/you/selling')
+        time.sleep(3)  # Wait for page to load
+        
+        wait = WebDriverWait(self.driver, 15)
+        deleted_count = 0
+        
+        while True:
+            try:
+                # Wait for listings to load and find all listing containers
+                # Try multiple selectors as Facebook's structure can vary
+                listing_selectors = [
+                    "div[aria-label='Listing']",
+                    "div[data-testid='marketplace-listing-item']",
+                    "div[role='article']",
+                    "div[data-testid='marketplace-listing']"
+                ]
+                
+                listing_elements = []
+                for selector in listing_selectors:
+                    listing_elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    if listing_elements:
+                        log(f'Found {len(listing_elements)} listings with selector: {selector}', 'main')
+                        break
+                
+                if not listing_elements:
+                    log('No more listings found to delete', 'success')
+                    break
+                
+                # Process each listing
+                for listing in listing_elements:
+                    try:
+                        # Scroll to the listing to ensure it's visible
+                        self.driver.execute_script("arguments[0].scrollIntoView(true);", listing)
+                        time.sleep(1)
+                        
+                        # Find and click the more options button (three dots)
+                        more_options_selectors = [
+                            "button[aria-label='More options']",
+                            "button[aria-label='More']",
+                            "button[data-testid='more-options']",
+                            "button[aria-haspopup='true']",
+                            "div[role='button'][aria-label*='More']"
+                        ]
+                        
+                        more_button = None
+                        for selector in more_options_selectors:
+                            try:
+                                more_button = listing.find_element(By.CSS_SELECTOR, selector)
+                                break
+                            except:
+                                continue
+                        
+                        if not more_button:
+                            log('Could not find more options button for listing', 'failure')
+                            continue
+                        
+                        # Click more options button
+                        more_button.click()
+                        time.sleep(1)
+                        
+                        # Find and click delete option
+                        delete_selectors = [
+                            "div[role='menuitem'][aria-label='Delete']",
+                            "div[role='menuitem'][aria-label*='Delete']",
+                            "span[text()='Delete']",
+                            "div[data-testid='delete-option']"
+                        ]
+                        
+                        delete_button = None
+                        for selector in delete_selectors:
+                            try:
+                                delete_button = wait.until(
+                                    EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                                )
+                                break
+                            except:
+                                continue
+                        
+                        if not delete_button:
+                            log('Could not find delete option', 'failure')
+                            continue
+                        
+                        # Click delete
+                        delete_button.click()
+                        time.sleep(1)
+                        
+                        # Find and click confirm delete button
+                        confirm_selectors = [
+                            "button[aria-label='Delete']",
+                            "button[data-testid='confirm-delete']",
+                            "span[text()='Delete']/..",
+                            "button[type='submit']"
+                        ]
+                        
+                        confirm_button = None
+                        for selector in confirm_selectors:
+                            try:
+                                confirm_button = wait.until(
+                                    EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                                )
+                                break
+                            except:
+                                continue
+                        
+                        if not confirm_button:
+                            log('Could not find confirm delete button', 'failure')
+                            continue
+                        
+                        # Click confirm
+                        confirm_button.click()
+                        time.sleep(2)
+                        
+                        # Wait for the listing to disappear
+                        try:
+                            wait.until(EC.staleness_of(listing))
+                        except:
+                            # If staleness check fails, wait a bit more
+                            time.sleep(3)
+                        
+                        deleted_count += 1
+                        log(f'Successfully deleted listing #{deleted_count}', 'success')
+                        
+                    except Exception as e:
+                        log(f'Error deleting listing: {str(e)}', 'failure')
+                        continue
+                
+                # After processing all visible listings, refresh the page to check for more
+                self.driver.refresh()
+                time.sleep(3)
+                
+            except Exception as e:
+                log(f'Error in delete loop: {str(e)}', 'failure')
+                break
+        
+        log(f'Deletion complete. Total items deleted: {deleted_count}', 'success')
+        return deleted_count
+
+
+
+
+
+
 class Item :
     def __init__(self, driver, item):
         self.driver = driver
@@ -110,7 +341,7 @@ class Item :
 
     @property
     def in_stock(self):
-        return self.item["in_stock"]
+        return self.item.get("in_stock", True)
         
     def populate_images_from_path(self):
         dir = self.item['images_path']
@@ -239,7 +470,7 @@ class Item :
             
             log('Location Chosen Successfully .', 'success')
             return True
-        except :
+        except Exception as e :
             log('FAILED TO CHOOSE THE Location', 'failure')
             return False
     
@@ -249,7 +480,7 @@ class Item :
             self.click_button('post_hide_from_friends')
             log('Checked Hide From Friends Successfully .', 'success')
             return True
-        except :
+        except Exception as e:
             log('FAILED TO Check Hide From Friends', 'failure')
             return False
 
@@ -277,6 +508,7 @@ class Item :
         element:WebElement = Element(self.driver, button).element
         element.click()
 
+
 def log(msg, type=None):
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
@@ -295,4 +527,3 @@ def log(msg, type=None):
     else:
         msg = msg + Style.RESET_ALL
     print (msg)
-

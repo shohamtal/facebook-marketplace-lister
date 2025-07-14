@@ -1,4 +1,5 @@
 import json
+import os
 from string import Formatter
 
 def read_json(file):
@@ -33,3 +34,7 @@ def format_xpath(fstring, vals):
         return fstring.format(*values)
     else:
         raise TypeError('Must be a string, a list or a tuple')
+
+def assert_directory(directory):
+    if not os.path.exists(directory):
+        os.makedirs(directory, exist_ok=True)

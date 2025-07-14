@@ -40,13 +40,14 @@
     "defaults": []
   },
   "post_title": {
-    "xpath": "//div[span/text() = \"כותרת\"]/input",
+    "old_xpath": "//div[span/text() = \"כותרת\"]/input",
+    "xpath": "//span[text() = \"כותרת\"]/following::input[1]",
     "type": "input",
     "defaults": []
   },
-
   "post_price": {
-    "xpath": "//div[span/text() = \"מחיר\"]/input",
+    "old_xpath": "//div[span/text() = \"מחיר\"]/input",
+    "xpath": "//span[text() = \"מחיר\"]/following::input[1]",
     "type": "input",
     "defaults": []
   },
@@ -56,14 +57,14 @@
     "defaults": []
   },
   "post_location": {
-    "xpath": "//div[span/text() = \"מיקום\"]/input",
-    "type": "input",
+    "xpath": "//div//span[text() = \"מיקום\"]",
+    "type": "element",
     "defaults": []
   },
   "post_location_option": {
     "xpath": "//ul/li[@role=\"option\"]//*[text() = \"{}\"]",
     "type": "element",
-    "defaults": "תל אביב - יפו"
+    "defaults": "נתניה"
   },
   "post_description": {
     "xpath": "//span[text() = \"תיאור\"]/..//textarea",
@@ -101,8 +102,13 @@
     "defaults": []
   },
   "post_publish_button": {
-    "xpath": "//*[text()=\"פרסם/פרסמי\"]",
+    "xpath": "//*[text()=\"לפרסם\"]",
     "type": "button",
+    "defaults": []
+  },
+  "my_items": {
+    "xpath": "//*[@aria-label=\"אוסף הפריטים שלך ב-Marketplace\"]/div/div/div[2]/div/div/div[3]/div/div/span/div/div/div",
+    "type": "",
     "defaults": []
   }
 }

@@ -2,7 +2,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.wait import WebDriverWait
 from Helpers import read_json, write_json, format_xpath
-from locale import Locale
+from locales import Locale
 
 
 class Element:
