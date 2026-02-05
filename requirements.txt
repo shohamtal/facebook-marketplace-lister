@@ -82,3 +82,4 @@ wsproto==1.2.0
 # The following packages are considered to be unsafe in a requirements file:
 # pip
 # setuptools
+python-dotenv==1.0.0

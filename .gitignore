@@ -7,3 +7,6 @@ backup/*
 __pycache__/*
 drivers/chrome*
 .idea*
+
+.DS_Store
+*.env

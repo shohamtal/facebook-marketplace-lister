@@ -2,6 +2,7 @@ import pickle
 from selenium import webdriver
 import time
 import os
+from dotenv import load_dotenv
 
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
@@ -16,6 +17,9 @@ from datetime import datetime
 from colorama import Fore, Style
 
 from locales import Locale
+
+# Load environment variables
+load_dotenv('facebook_credentials.env')
 
 
 class Lister:
@@ -53,51 +57,176 @@ class Lister:
 
     def read_accounts(self):
         return read_json('accounts')['accounts']
-        
-    def login(self, email):
-        self.driver.get('https://www.facebook.com/login')
-
-        # try to check if we can restore login from previous cookie
+    
+    def clear_expired_cookies(self, email):
+        """Clear expired cookies and force fresh login"""
         self.cookies_dir = f".{email}"
         self.cookies_file_path = os.path.join(self.cookies_dir, "cookies.pkl")
+        
         if os.path.isfile(self.cookies_file_path):
-            cookies = pickle.load(open(self.cookies_file_path, "rb"))
-            for cookie in cookies:
-                self.driver.add_cookie(cookie)
-            return True
-
-        registered_accounts = self.read_accounts()
-        account_info = next(x for x in registered_accounts if x['email'] == email)
-        log('Logging in as "%s" ..' % account_info['name'], 'main')
-
-        # entering email
-        email_input = Element(self.driver, 'login_email').element
-        email_input.clear()
-        email_input.send_keys(account_info['email'])
-        
-        # entering password
-        password_input = Element(self.driver, 'login_password').element
-        password_input.clear()
-        password_input.send_keys(account_info['password'])
-        
-        # Submitting
-        password_button = Element(self.driver, 'login_button').element
-        password_button.click()
-
-        # 2fa
-        if account_info['is_2fa_enabled']:
-            print("do it yourself!!!!")
-            # two_fa_button = Element(self.driver, '2fa_button').element
-            # two_fa_button.click()
-            # two_fa_sms_radio = Element(self.driver, '2fa_sms_radio').element
-            # two_fa_sms_radio.click()
-            # Element(self.driver, '2fa_continue_to_sms').element.click()
-
-        # save coockies state:
-        assert_directory(self.cookies_dir)
-        pickle.dump(self.driver.get_cookies(), open(self.cookies_file_path, "wb"))
-
+            try:
+                os.remove(self.cookies_file_path)
+                log('Cleared expired cookies, will login fresh', 'main')
+                return True
+            except Exception as e:
+                log(f'Error clearing cookies: {str(e)}', 'failure')
+                return False
         return True
+        
+    def login_with_credentials(self, email):
+        # Check if environment credentials are available
+        env_email = os.getenv('FACEBOOK_EMAIL')
+        env_password = os.getenv('FACEBOOK_PASSWORD')
+        
+        if env_email and env_password and env_email != 'your_email@example.com':
+            log('Using environment credentials for login', 'main')
+            return self._login_with_credentials(env_email, env_password, email)
+        
+        raise Exception('No environment credentials found')
+        
+    def login(self, email):
+        # Try cookie-based login first
+        self.cookies_dir = f".{email}"
+        self.cookies_file_path = os.path.join(self.cookies_dir, "cookies.pkl")
+        
+        if os.path.isfile(self.cookies_file_path):
+            try:
+                cookies = pickle.load(open(self.cookies_file_path, "rb"))
+                
+                # Check if cookies are expired
+                current_time = time.time()
+                valid_cookies = []
+                for cookie in cookies:
+                    # Check if cookie has expiration and if it's still valid
+                    if 'expiry' in cookie and cookie['expiry']:
+                        if cookie['expiry'] > current_time:
+                            valid_cookies.append(cookie)
+                        else:
+                            log(f'Cookie expired: {cookie.get("name", "unknown")}', 'main')
+                    else:
+                        # Session cookies (no expiry) are usually valid
+                        valid_cookies.append(cookie)
+                
+                if valid_cookies:
+                    # Navigate to facebook domain BEFORE adding cookies
+                    self.driver.get('https://www.facebook.com/')
+                    time.sleep(2)
+                    
+                    for cookie in valid_cookies:
+                        self.driver.add_cookie(cookie)
+                    
+                    # Test if login was successful by navigating to a protected page
+                    self.driver.get('https://www.facebook.com/marketplace/you/selling')
+                    time.sleep(2)
+                    
+                    # Check if we're still on login page (cookies expired)
+                    if 'login' in self.driver.current_url:
+                        log('Cookies expired, need to login manually', 'main')
+                    else:
+                        log('Successfully logged in using saved cookies', 'success')
+                        return True
+                else:
+                    log('All cookies expired, need to login manually', 'main')
+                    
+            except Exception as e:
+                log(f'Error loading cookies: {str(e)}', 'failure')
+                return False
+            
+        return self.login_with_credentials(email)
+
+        # Fallback to accounts.json
+        # registered_accounts = self.read_accounts()
+        # account_info = next(x for x in registered_accounts if x['email'] == email)
+        # log('Logging in as "%s" ..' % account_info['name'], 'main')
+
+        # # entering email
+        # email_input = Element(self.driver, 'login_email').element
+        # email_input.clear()
+        # email_input.send_keys(account_info['email'])
+        
+        # # entering password
+        # password_input = Element(self.driver, 'login_password').element
+        # password_input.clear()
+        # password_input.send_keys(account_info['password'])
+        
+        # # Submitting
+        # password_button = Element(self.driver, 'login_button').element
+        # password_button.click()
+
+        # # 2fa
+        # if account_info['is_2fa_enabled']:
+        #     print("do it yourself!!!!")
+        #     # two_fa_button = Element(self.driver, '2fa_button').element
+        #     # two_fa_button.click()
+        #     # two_fa_sms_radio = Element(self.driver, '2fa_sms_radio').element
+        #     # two_fa_sms_radio.click()
+        #     # Element(self.driver, '2fa_continue_to_sms').element.click()
+
+        # # save coockies state:
+        # assert_directory(self.cookies_dir)
+        # pickle.dump(self.driver.get_cookies(), open(self.cookies_file_path, "wb"))
+
+        # return True
+
+    def _login_with_credentials(self, email, password, account_email):
+        """Login using environment credentials"""
+        log(f'Logging in with credentials for {email}', 'main')
+        self.driver.get('https://www.facebook.com/login')
+        
+        # Wait for page to load
+        time.sleep(3)
+        
+        try:
+            # Find email input
+            email_input = self.driver.find_element(By.ID, 'email')
+            email_input.clear()
+            email_input.send_keys(email)
+            
+            # Find password input
+            password_input = self.driver.find_element(By.ID, 'pass')
+            password_input.clear()
+            password_input.send_keys(password)
+            
+            # Click login button
+            login_button = self.driver.find_element(By.NAME, 'login')
+            login_button.click()
+            
+            # Wait for login to complete
+            time.sleep(5)
+            
+            # Check if login was successful
+            current_url = self.driver.current_url
+            if 'two_step_verification' in current_url:
+                print("Two-step verification required. please solve puzzele manually")
+                
+            if 'login' in current_url or 'checkpoint' in current_url:
+                log('Login failed or requires additional verification', 'failure')
+                return False
+            
+            # Navigate to marketplace to verify access
+            self.driver.get('https://www.facebook.com/marketplace/you/selling')
+            time.sleep(3)
+            
+            # Check if we can access marketplace
+            current_url = self.driver.current_url
+            if 'marketplace' in current_url:
+                log('Successfully logged in with credentials', 'success')
+                
+                # Save cookies for future use
+                self.cookies_dir = f".{account_email}"
+                assert_directory(self.cookies_dir)
+                self.cookies_file_path = os.path.join(self.cookies_dir, "cookies.pkl")
+                pickle.dump(self.driver.get_cookies(), open(self.cookies_file_path, "wb"))
+                log('Cookies saved for future use', 'main')
+                
+                return True
+            else:
+                log('Login successful but cannot access marketplace', 'failure')
+                return False
+                
+        except Exception as e:
+            log(f'Error during credential login: {str(e)}', 'failure')
+            return False
     
     def list(self, item):
         log(f'listing item {item["title"]}', 'main')
@@ -143,6 +272,7 @@ class Lister:
         time.sleep(self.sleep_time)
         
         listing_item.click_publish()
+        time.sleep(self.sleep_time)
 
     def delete_all_items_not_working(self):
         # self.driver.get('https://www.facebook.com/marketplace/you/selling')
@@ -437,9 +567,9 @@ class Item :
             description_input.send_keys(self.item['description'])
             log('Entered Description Successfully .', 'success')
             return True
-        except :
+        except Exception as e:
             log('FAILED TO ENTER THE Description', 'failure')
-            return False
+            raise Exception('FAILED TO ENTER THE Description')
         
     def enter_sku(self):
         try:

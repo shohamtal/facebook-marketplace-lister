@@ -8,7 +8,7 @@ import os
 # MAC_CHIP = 'mac-x64' # for intel
 MAC_CHIP = 'mac-arm64' # for apple silicone
 
-VER = "137.0.7151.103" # select most closest version to google-chrome
+VER = "143.0.7499.40" # select most closest version to google-chrome
 avialable_ver = None
 
 while not avialable_ver:
@@ -19,6 +19,11 @@ while not avialable_ver:
     VER = VER[:-1]
 
 print(f"Downloading chromedriver version {VER}")
+
+script_dir = os.path.dirname(os.path.abspath(__file__))
+os.chdir(script_dir)
+print(f"Current working directory: {os.getcwd()}")
+
 driver_path = "chromedriver.zip"
 shutil.rmtree("./chromedriver-" + MAC_CHIP, ignore_errors=True)
 download_url = next(x for x in avialable_ver["downloads"]["chromedriver"] if x["platform"] == MAC_CHIP)["url"]
