@@ -10,3 +10,4 @@ drivers/chrome*
 
 .DS_Store
 *.env
+selling_page_debug.html
