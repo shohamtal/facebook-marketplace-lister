@@ -7,7 +7,7 @@ def list_my_personal_items(email: str):
     off = [omega_moon, pagani_pd1734, pagani_batman]
     products = [seiko_batman, bowl, ap_silver, ponda, casioak, ferari
              , pagani_skeleton, hublot, citizen_tsuyosa_gold,
-             rm_black, rm_black_and_red, rm_blue_gold, rm_foxbox, rm_gold, rm_yellow,
+             rm_black, rm_blue_gold, rm_foxbox, rm_gold, rm_yellow,
              ]
     products = [ap_silver
              
