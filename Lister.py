@@ -1,4 +1,6 @@
 import pickle
+from typing import Any, Dict, List, Optional, Tuple
+
 from selenium import webdriver
 import time
 import os
