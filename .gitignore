@@ -10,4 +10,22 @@ drivers/chrome*
 
 .DS_Store
 *.env
+
+# Sensitive: session cookies per account
+.shoamtal@gmail.com/
+.shoamtal.tests@gmail.com/
+*.pkl
+
+# Sensitive: personal items with addresses
+items_to_publish.py
+
+# Debug dumps (may contain session data)
+debug_*.py
+debug_*.html
 selling_page_debug.html
+
+# Claude Code local memory
+.claude/
+
+# Virtual environment
+.venv/
