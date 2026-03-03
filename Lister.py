@@ -19,20 +19,25 @@ from datetime import datetime
 from colorama import Fore, Style
 
 from locales import Locale
+from typing import Any, Dict, List, Optional, Tuple
 
 # Load environment variables
 load_dotenv('facebook_credentials.env')
 
 
 class Lister:
-    def __init__(self):
+    def __init__(self, headless: bool = False):
         self.driver_file = 'chromedriver'
         self.sleep_time = 1
         chrome_options = webdriver.ChromeOptions()
-        prefs = {"profile.default_content_setting_values.notifications" : 2}
-        chrome_options.add_experimental_option("prefs",prefs)
-        chrome_options.add_experimental_option("detach", True)
+        prefs = {"profile.default_content_setting_values.notifications": 2}
+        chrome_options.add_experimental_option("prefs", prefs)
+        chrome_options.add_experimental_option("detach", not headless)
         chrome_options.add_argument("--start-maximized")
+        if headless:
+            chrome_options.add_argument("--headless=new")
+            chrome_options.add_argument("--disable-gpu")
+            chrome_options.add_argument("--window-size=1920,1080")
         service = Service('drivers/%s' % self.driver_file)
         self.driver = webdriver.Chrome(service=service, options=chrome_options)
         self.driver.implicitly_wait(30)
@@ -98,18 +103,20 @@ class Lister:
                 # Check if cookies are expired
                 current_time = time.time()
                 valid_cookies = []
+                invalid_cookies = []
                 for cookie in cookies:
                     # Check if cookie has expiration and if it's still valid
                     if 'expiry' in cookie and cookie['expiry']:
                         if cookie['expiry'] > current_time:
                             valid_cookies.append(cookie)
                         else:
+                            invalid_cookies.append(cookie)
                             log(f'Cookie expired: {cookie.get("name", "unknown")}', 'main')
                     else:
                         # Session cookies (no expiry) are usually valid
                         valid_cookies.append(cookie)
                 
-                if valid_cookies:
+                if valid_cookies and not invalid_cookies:
                     # Navigate to facebook domain BEFORE adding cookies
                     self.driver.get('https://www.facebook.com/')
                     time.sleep(2)
@@ -180,18 +187,17 @@ class Lister:
         
         try:
             # Find email input
-            email_input = self.driver.find_element(By.ID, 'email')
+            email_input = self.driver.find_element(By.NAME, 'email')
             email_input.clear()
             email_input.send_keys(email)
-            
+
             # Find password input
-            password_input = self.driver.find_element(By.ID, 'pass')
+            password_input = self.driver.find_element(By.NAME, 'pass')
             password_input.clear()
             password_input.send_keys(password)
             
-            # Click login button
-            login_button = self.driver.find_element(By.NAME, 'login')
-            login_button.click()
+            # Submit login form
+            password_input.send_keys(Keys.RETURN)
             
             # Wait for login to complete
             time.sleep(5)
@@ -228,7 +234,7 @@ class Lister:
                 
         except Exception as e:
             log(f'Error during credential login: {str(e)}', 'failure')
-            return False
+            raise e
     
     def list(self, item):
         log(f'listing item {item["title"]}', 'main')
@@ -316,149 +322,376 @@ class Lister:
 
             print("Listing deleted.")
 
-    def delete_all_items(self):
+    def _is_chrome_error_page(self) -> bool:
+        """True if the current page is a Chrome error page (e.g. ERR_TOO_MANY_REDIRECTS)."""
+        try:
+            src = self.driver.page_source
+            return (
+                "ERR_TOO_MANY_REDIRECTS" in src
+                or "This page isn't working" in src
+                or ("error-code" in src and "ERR_" in src)
+            )
+        except Exception:
+            return False
+
+    def _wait_selling_page_ready(self) -> None:
+        """Wait for selling page to finish loading (fixed wait + optional element wait)."""
+        if self._is_chrome_error_page():
+            return
+        # Wait for URL to be marketplace selling
+        WebDriverWait(self.driver, 15).until(
+            lambda d: "marketplace" in d.current_url and "selling" in d.current_url
+        )
+        # Fixed wait for React/SPA to render listing cards
+        time.sleep(5)
+        # Optionally wait for "more options" if present soon
+        try:
+            WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located(
+                    (By.CSS_SELECTOR, "[role='button'][aria-label^='אפשרויות נוספות עבור']")
+                )
+            )
+        except Exception:
+            try:
+                WebDriverWait(self.driver, 5).until(
+                    EC.presence_of_element_located(
+                        (By.XPATH, "//*[@role='button' and contains(@aria-label, 'אפשרויות נוספות')]")
+                    )
+                )
+            except Exception:
+                pass  # proceed anyway after fixed wait
+        time.sleep(1)
+
+    def _scroll_selling_page_to_load_listings(self) -> None:
+        """Scroll the selling page to trigger lazy-loaded listing cards."""
+        for _ in range(4):
+            self.driver.execute_script(
+                "window.scrollBy(0, window.innerHeight);"
+            )
+            time.sleep(1.5)
+        self.driver.execute_script("window.scrollTo(0, 0);")
+        time.sleep(1)
+
+    def _find_listing_buttons(
+        self, selectors: List[Tuple[Any, str]]
+    ) -> Tuple[list, int, str]:
+        """Find 'more options' buttons. Returns (elements, index_used, selector_used)."""
+        for i, (by, sel) in enumerate(selectors):
+            elms = self.driver.find_elements(by, sel)
+            if elms:
+                return (elms, i, sel)
+        return ([], -1, "")
+
+    def _find_clickable(
+        self,
+        selectors: List[Tuple[Any, str]],
+        per_selector_timeout: float = 3,
+    ) -> Tuple[Optional[WebElement], int, str]:
+        """Try selectors in order with a short timeout each; return (element, index_used, selector_used)."""
+        for i, (by, sel) in enumerate(selectors):
+            try:
+                el = WebDriverWait(self.driver, per_selector_timeout).until(
+                    EC.element_to_be_clickable((by, sel))
+                )
+                return (el, i, sel)
+            except Exception:
+                continue
+        return (None, -1, "")
+
+    def _safe_click(self, element: WebElement) -> None:
+        """Click an element; fall back to JS click if an overlay intercepts it."""
+        try:
+            element.click()
+        except Exception as e:
+            if "element click intercepted" in str(e) or "ElementClickInterceptedException" in type(e).__name__:
+                log('Click intercepted by overlay, using JS click.', 'main')
+                self.driver.execute_script("arguments[0].click();", element)
+            else:
+                raise
+
+    def _js_click_menu_item(self, text: str) -> bool:
+        """Use JavaScript to find and click a role='menuitem' by its visible text."""
+        return bool(self.driver.execute_script("""
+            var items = document.querySelectorAll('[role="menuitem"]');
+            for (var i = 0; i < items.length; i++) {
+                if ((items[i].innerText || '').includes(arguments[0])) {
+                    items[i].click();
+                    return true;
+                }
+            }
+            return false;
+        """, text))
+
+    def _js_click_dialog_button(self, button_text: str, dialog_label: str = '') -> bool:
+        """
+        Use JavaScript to find and click a button inside a dialog by visible text
+        or aria-label.  Runs in browser context so overlays are irrelevant.
+        If dialog_label is given, only buttons inside a dialog whose aria-label
+        contains that string are considered.
+        """
+        return bool(self.driver.execute_script("""
+            var target = arguments[0];
+            var dlgLabel = arguments[1];
+            var dialogs = document.querySelectorAll('[role="dialog"]');
+            /* If dialog_label given, narrow to that dialog */
+            for (var d = 0; d < dialogs.length; d++) {
+                var da = dialogs[d].getAttribute('aria-label') || '';
+                if (dlgLabel && !da.includes(dlgLabel)) continue;
+                var btns = dialogs[d].querySelectorAll('[role="button"], button');
+                /* First pass: prefer a button with matching aria-label AND visible text */
+                for (var b = 0; b < btns.length; b++) {
+                    var btn = btns[b];
+                    var label = btn.getAttribute('aria-label') || '';
+                    var txt   = (btn.innerText || '').trim();
+                    if (label === target && txt === target) {
+                        btn.click();
+                        return true;
+                    }
+                }
+                /* Second pass: match aria-label alone (text may be empty) */
+                for (var b = 0; b < btns.length; b++) {
+                    var btn = btns[b];
+                    var label = btn.getAttribute('aria-label') || '';
+                    if (label === target) {
+                        btn.click();
+                        return true;
+                    }
+                }
+            }
+            return false;
+        """, button_text, dialog_label))
+
+    def _dump_selling_page_debug_html(self) -> None:
+        """Write current page HTML to a file when no listings are found (for debugging selectors)."""
+        if self._is_chrome_error_page():
+            log('Skipping debug dump: page is a browser error (e.g. redirect loop), not Facebook.', 'main')
+            return
+        path = "selling_page_debug.html"
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(self.driver.page_source)
+            log(f'Debug: saved page HTML to {path}', 'main')
+        except Exception as e:
+            log(f'Could not save debug HTML: {e}', 'failure')
+
+    def delete_all_items(self) -> int:
         """
         Delete all items from Facebook Marketplace selling page.
-        Navigates to the selling page and systematically deletes all listings.
+        Hebrew UI flow: "אפשרויות נוספות עבור" -> "מחיקת המודעה" -> "מחיקה" (confirm).
+
+        Primary approach: JavaScript clicks (run inside the browser, bypass overlays).
+        Fallback: Selenium selectors with _safe_click.
         """
         log('Starting to delete all marketplace items...', 'main')
-        
-        # Navigate to the selling page
-        self.driver.get('https://www.facebook.com/marketplace/you/selling')
-        time.sleep(3)  # Wait for page to load
-        
-        wait = WebDriverWait(self.driver, 15)
+        selling_url = 'https://www.facebook.com/marketplace/you/selling'
+
+        # --- Navigate to selling page with redirect-loop handling ---
+        self.driver.get(selling_url)
+        time.sleep(5)
+        if self._is_chrome_error_page():
+            log('Redirect loop detected. Trying via facebook.com first...', 'main')
+            self.driver.get('https://www.facebook.com/')
+            time.sleep(4)
+            self.driver.get(selling_url)
+            time.sleep(5)
+        if self._is_chrome_error_page():
+            log(
+                'Facebook redirected too many times. Clear cookies and log in again: '
+                'run renew_cookies(email).',
+                'failure',
+            )
+            return 0
+
+        self._wait_selling_page_ready()
+        self._scroll_selling_page_to_load_listings()
+        time.sleep(2)
+
         deleted_count = 0
-        
+        consecutive_failures = 0
+        max_consecutive_failures = 5
+
+        # --- Selenium fallback selectors (used only if JS click fails) ---
+
+        more_options_selectors = [  # type: List[Tuple[Any, str]]
+            (By.CSS_SELECTOR, "[role='button'][aria-label^='אפשרויות נוספות עבור']"),
+            (By.XPATH, "//*[@role='button' and starts-with(@aria-label, 'אפשרויות נוספות עבור')]"),
+            (By.CSS_SELECTOR, "[role='button'][aria-label*='אפשרויות נוספות']"),
+            (By.CSS_SELECTOR, "button[aria-label='More options']"),
+            (By.CSS_SELECTOR, "button[aria-label='More']"),
+        ]
+
+        delete_menu_fallback = [  # type: List[Tuple[Any, str]]
+            (By.XPATH, "//div[@role='menuitem'][.//span[contains(text(),'מחיקת המודעה')]]"),
+            (By.XPATH, "//span[text()='מחיקת המודעה']/ancestor::div[@role='menuitem']"),
+            (By.XPATH, "//div[@role='menuitem']//span[contains(text(),'מחיקת המודעה')]"),
+            (By.XPATH, "//div[@role='menuitem']//span[contains(text(),'Delete')]"),
+            (By.XPATH, "//div[@role='menuitem']//span[contains(text(),'מחק')]"),
+        ]
+
+        confirm_fallback = [  # type: List[Tuple[Any, str]]
+            (By.XPATH, "//div[@role='dialog']//div[@role='button'][@aria-label='מחיקה']"),
+            (By.XPATH, "//div[@role='dialog' and contains(@aria-label,'מחיקת מודעה')]//*[@role='button'][@aria-label='מחיקה']"),
+            (By.XPATH, "//div[@role='dialog' and contains(@aria-label,'מחיקת מודעה')]//div[@role='button'][text()='מחיקה']"),
+        ]
+
+        fallbacks_used = []  # type: List[Tuple[str, str]]
+
         while True:
-            try:
-                # Wait for listings to load and find all listing containers
-                # Try multiple selectors as Facebook's structure can vary
-                listing_selectors = [
-                    "div[aria-label='Listing']",
-                    "div[data-testid='marketplace-listing-item']",
-                    "div[role='article']",
-                    "div[data-testid='marketplace-listing']"
-                ]
-                
-                listing_elements = []
-                for selector in listing_selectors:
-                    listing_elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                    if listing_elements:
-                        log(f'Found {len(listing_elements)} listings with selector: {selector}', 'main')
-                        break
-                
-                if not listing_elements:
-                    log('No more listings found to delete', 'success')
-                    break
-                
-                # Process each listing
-                for listing in listing_elements:
-                    try:
-                        # Scroll to the listing to ensure it's visible
-                        self.driver.execute_script("arguments[0].scrollIntoView(true);", listing)
-                        time.sleep(1)
-                        
-                        # Find and click the more options button (three dots)
-                        more_options_selectors = [
-                            "button[aria-label='More options']",
-                            "button[aria-label='More']",
-                            "button[data-testid='more-options']",
-                            "button[aria-haspopup='true']",
-                            "div[role='button'][aria-label*='More']"
-                        ]
-                        
-                        more_button = None
-                        for selector in more_options_selectors:
-                            try:
-                                more_button = listing.find_element(By.CSS_SELECTOR, selector)
-                                break
-                            except:
-                                continue
-                        
-                        if not more_button:
-                            log('Could not find more options button for listing', 'failure')
-                            continue
-                        
-                        # Click more options button
-                        more_button.click()
-                        time.sleep(1)
-                        
-                        # Find and click delete option
-                        delete_selectors = [
-                            "div[role='menuitem'][aria-label='Delete']",
-                            "div[role='menuitem'][aria-label*='Delete']",
-                            "span[text()='Delete']",
-                            "div[data-testid='delete-option']"
-                        ]
-                        
-                        delete_button = None
-                        for selector in delete_selectors:
-                            try:
-                                delete_button = wait.until(
-                                    EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-                                )
-                                break
-                            except:
-                                continue
-                        
-                        if not delete_button:
-                            log('Could not find delete option', 'failure')
-                            continue
-                        
-                        # Click delete
-                        delete_button.click()
-                        time.sleep(1)
-                        
-                        # Find and click confirm delete button
-                        confirm_selectors = [
-                            "button[aria-label='Delete']",
-                            "button[data-testid='confirm-delete']",
-                            "span[text()='Delete']/..",
-                            "button[type='submit']"
-                        ]
-                        
-                        confirm_button = None
-                        for selector in confirm_selectors:
-                            try:
-                                confirm_button = wait.until(
-                                    EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
-                                )
-                                break
-                            except:
-                                continue
-                        
-                        if not confirm_button:
-                            log('Could not find confirm delete button', 'failure')
-                            continue
-                        
-                        # Click confirm
-                        confirm_button.click()
-                        time.sleep(2)
-                        
-                        # Wait for the listing to disappear
-                        try:
-                            wait.until(EC.staleness_of(listing))
-                        except:
-                            # If staleness check fails, wait a bit more
-                            time.sleep(3)
-                        
-                        deleted_count += 1
-                        log(f'Successfully deleted listing #{deleted_count}', 'success')
-                        
-                    except Exception as e:
-                        log(f'Error deleting listing: {str(e)}', 'failure')
-                        continue
-                
-                # After processing all visible listings, refresh the page to check for more
-                self.driver.refresh()
-                time.sleep(3)
-                
-            except Exception as e:
-                log(f'Error in delete loop: {str(e)}', 'failure')
+            # --- Find listing "more options" buttons ---
+            more_buttons, more_idx, more_sel = self._find_listing_buttons(
+                more_options_selectors
+            )
+            if not more_buttons:
+                if deleted_count == 0:
+                    self._dump_selling_page_debug_html()
+                    log('No listings found to delete.', 'failure')
+                else:
+                    log('No more listings found to delete.', 'success')
                 break
-        
-        log(f'Deletion complete. Total items deleted: {deleted_count}', 'success')
+
+            if more_idx > 0:
+                fallbacks_used.append(("more_options", more_sel))
+            log(
+                f'Found {len(more_buttons)} listing(s) | more_options: selector #{more_idx + 1} used',
+                'main',
+            )
+
+            more_btn = more_buttons[0]
+            try:
+                # --- Click "more options" ---
+                self.driver.execute_script(
+                    "arguments[0].scrollIntoView({block: 'center'});", more_btn
+                )
+                time.sleep(0.5)
+                self._safe_click(more_btn)
+                time.sleep(1)
+
+                # --- Click "delete listing" in the menu ---
+                del_method = "JS"
+                if not self._js_click_menu_item('מחיקת המודעה'):
+                    log('  JS menu click missed, trying Selenium fallback...', 'main')
+                    delete_btn, del_idx, del_sel = self._find_clickable(
+                        delete_menu_fallback, per_selector_timeout=3
+                    )
+                    if not delete_btn:
+                        log('Could not find delete menu option; dismissing menu.', 'failure')
+                        self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+                        time.sleep(1)
+                        consecutive_failures += 1
+                        if consecutive_failures >= max_consecutive_failures:
+                            log(f'Stopping after {max_consecutive_failures} consecutive failures.', 'failure')
+                            self._dump_selling_page_debug_html()
+                            break
+                        continue
+                    del_method = f"Selenium #{del_idx + 1}"
+                    fallbacks_used.append(("delete_menu", del_sel))
+                    self._safe_click(delete_btn)
+                log(f'  delete_menu: {del_method} used', 'main')
+
+                # Wait for the dialog to appear
+                try:
+                    WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located(
+                            (By.CSS_SELECTOR, "[role='dialog']")
+                        )
+                    )
+                except Exception:
+                    pass
+                time.sleep(0.5)
+
+                # --- Click confirm in the dialog ---
+                conf_method = "JS"
+                if not self._js_click_dialog_button('מחיקה', 'מחיקת מודעה'):
+                    log('  JS confirm click missed, trying Selenium fallback...', 'main')
+                    confirm_btn, conf_idx, conf_sel = self._find_clickable(
+                        confirm_fallback, per_selector_timeout=3
+                    )
+                    if not confirm_btn:
+                        log('Could not find confirm button; pressing Escape.', 'failure')
+                        self._dump_selling_page_debug_html()
+                        self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+                        time.sleep(1)
+                        consecutive_failures += 1
+                        if consecutive_failures >= max_consecutive_failures:
+                            log(f'Stopping after {max_consecutive_failures} consecutive failures.', 'failure')
+                            break
+                        continue
+                    conf_method = f"Selenium #{conf_idx + 1}"
+                    fallbacks_used.append(("confirm", conf_sel))
+                    self._safe_click(confirm_btn)
+                log(f'  confirm: {conf_method} used', 'main')
+
+                # Wait for the confirmation dialog to close
+                try:
+                    WebDriverWait(self.driver, 10).until_not(
+                        EC.presence_of_element_located(
+                            (By.CSS_SELECTOR, "[role='dialog']")
+                        )
+                    )
+                except Exception:
+                    time.sleep(2)
+                time.sleep(1)
+
+                # Verify the listing count actually decreased
+                new_buttons, _, _ = self._find_listing_buttons(more_options_selectors)
+                if len(new_buttons) >= len(more_buttons):
+                    log('Listing count did not decrease — deletion may have failed.', 'failure')
+                    consecutive_failures += 1
+                    if consecutive_failures >= max_consecutive_failures:
+                        log(f'Stopping after {max_consecutive_failures} consecutive failures.', 'failure')
+                        self._dump_selling_page_debug_html()
+                        break
+                    continue
+
+                deleted_count += 1
+                consecutive_failures = 0
+                log(f'Successfully deleted listing #{deleted_count}', 'success')
+
+                # Re-scroll every 5 deletions to load lazy-loaded listings
+                if deleted_count % 5 == 0:
+                    self._scroll_selling_page_to_load_listings()
+                    time.sleep(1)
+
+            except Exception as e:
+                log(f'Error deleting listing: {str(e)}', 'failure')
+                consecutive_failures += 1
+                if consecutive_failures >= max_consecutive_failures:
+                    log(f'Stopping after {max_consecutive_failures} consecutive failures.', 'failure')
+                    break
+                time.sleep(2)
+                self.driver.get(selling_url)
+                time.sleep(3)
+                self._wait_selling_page_ready()
+                self._scroll_selling_page_to_load_listings()
+
+        if deleted_count > 0:
+            log(f'Deletion complete. Total items deleted: {deleted_count}', 'success')
+        else:
+            log('Deletion complete. No items were deleted.', 'failure')
+
+        if fallbacks_used:
+            seen = {}  # type: Dict[str, str]
+            for step, sel in fallbacks_used:
+                seen[step] = sel
+            log(
+                'FALLBACK USED: Selenium selectors were used (JS click failed). '
+                'Check if the JS helpers need updating:',
+                'failure',
+            )
+            for step, sel in seen.items():
+                log(f'  {step}: {sel!r}', 'failure')
+            lines = []
+            for step, sel in seen.items():
+                lines.append(f'  - {step}: {sel!r}')
+            prompt_text = (
+                '\n===== COPY-PASTE THIS PROMPT =====\n'
+                'The following selectors are working but are not first in line — '
+                'please move them to the head of their respective list in Lister.py:\n'
+                + '\n'.join(lines)
+                + '\n=================================='
+            )
+            print(prompt_text)
+
         return deleted_count
 
 

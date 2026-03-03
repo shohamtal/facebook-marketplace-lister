@@ -8,7 +8,7 @@ import os
 # MAC_CHIP = 'mac-x64' # for intel
 MAC_CHIP = 'mac-arm64' # for apple silicone
 
-VER = "143.0.7499.40" # select most closest version to google-chrome
+VER = "145.0.7632.109" # select most closest version to google-chrome
 avialable_ver = None
 
 while not avialable_ver:
